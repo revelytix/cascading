@@ -25,6 +25,7 @@ import java.io.Serializable;
 import java.util.Arrays;
 import java.util.regex.Pattern;
 
+import au.com.bytecode.opencsv.CSVParser;
 import cascading.flow.FlowProcess;
 import cascading.tap.Tap;
 import cascading.tap.TapException;
@@ -50,8 +51,6 @@ public class DelimitedParser implements Serializable
 
   /** Field SPECIAL_REGEX_CHARS */
   static final String SPECIAL_REGEX_CHARS = "([\\]\\[|.*<>\\\\$^?()=!+])";
-  /** Field QUOTED_REGEX_FORMAT */
-  static final String QUOTED_REGEX_FORMAT = "%2$s(?=(?:[^%1$s]*%1$s[^%1$s]*[^%1$s%2$s]*%1$s)*(?![^%1$s]*%1$s))";
   /** Field CLEAN_REGEX_FORMAT */
   static final String CLEAN_REGEX_FORMAT = "^(?:%1$s)(.*)(?:%1$s)$";
   /** Field ESCAPE_REGEX_FORMAT */
@@ -66,6 +65,10 @@ public class DelimitedParser implements Serializable
   protected Pattern cleanPattern;
   /** Field escapePattern */
   protected Pattern escapePattern;
+  
+  /** Field csvParser - used when a quote is specified, runs faster than regex **/
+  protected CSVParser csvParser;
+  
   /** Field delimiter * */
   String delimiter;
   /** Field quote */
@@ -117,9 +120,13 @@ public class DelimitedParser implements Serializable
       throw new IllegalArgumentException( "may not be zero declared fields, found: " + sinkFields.printVerbose() );
 
     if( quote != null && !quote.isEmpty() ) // if empty, leave null
-      this.quote = quote;
+    {
+    	this.quote = quote;
+    	csvParser = new CSVParser(delimiter.charAt(0), quote.charAt(0));
+    } else {
+    	splitPattern = createSplitPatternFor( this.delimiter);
+    }
 
-    splitPattern = createSplitPatternFor( this.delimiter, this.quote );
     cleanPattern = createCleanPatternFor( this.quote );
     escapePattern = createEscapePatternFor( this.quote );
 
@@ -170,20 +177,15 @@ public class DelimitedParser implements Serializable
 
   /**
    * Method createSplitPatternFor creates a regex {@link java.util.regex.Pattern} for splitting a line of text into its component
-   * parts using the given delimiter and quote Strings. {@code quote} may be null.
+   * parts using the given delimiter.
    *
    * @param delimiter of type String
-   * @param quote     of type String
    * @return Pattern
    */
-  public static Pattern createSplitPatternFor( String delimiter, String quote )
+  public static Pattern createSplitPatternFor( String delimiter )
     {
     String escapedDelimiter = delimiter.replaceAll( SPECIAL_REGEX_CHARS, "\\\\$1" );
-
-    if( quote == null || quote.isEmpty() )
-      return Pattern.compile( escapedDelimiter );
-    else
-      return Pattern.compile( String.format( QUOTED_REGEX_FORMAT, quote, escapedDelimiter ) );
+    return Pattern.compile( escapedDelimiter );
     }
 
   /**
@@ -194,9 +196,17 @@ public class DelimitedParser implements Serializable
    * @param numValues    of type int
    * @return String[]
    */
-  public static String[] createSplit( String value, Pattern splitPattern, int numValues )
+  public String[] createSplit( String value, int numValues )
     {
-    return splitPattern.split( value, numValues );
+	  if( this.quote == null ){
+		  return splitPattern.split(value, numValues);
+	  }else {
+		try {
+			return csvParser.parseLine(value);
+		} catch (IOException e) {
+			throw new TapException ("Error reading delimited data", e);
+		}
+	  }
     }
 
   /**
@@ -277,7 +287,7 @@ public class DelimitedParser implements Serializable
 
   public Object[] parseLine( String line )
     {
-    Object[] split = createSplit( line, splitPattern, numValues );
+    Object[] split = createSplit( line, numValues );
 
     if( numValues != 0 && split.length != numValues )
       {
