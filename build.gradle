@@ -35,6 +35,7 @@
  */
 
 apply from: 'etc/version.gradle'
+apply plugin: 'eclipse'
 
 configurations {
   s3AntTask
